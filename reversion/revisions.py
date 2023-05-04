@@ -147,8 +147,7 @@ def _follow_relations(obj):
         if isinstance(follow_obj, models.Model):
             yield follow_obj
         elif isinstance(follow_obj, (models.Manager, QuerySet)):
-            for follow_obj_instance in follow_obj.all():
-                yield follow_obj_instance
+            yield from follow_obj.all()
         elif follow_obj is not None:
             raise RegistrationError("{name}.{follow_name} should be a Model or QuerySet".format(
                 name=obj.__class__.__name__,
@@ -284,7 +283,9 @@ def _create_revision_context(manage_manually, using, atomic):
         try:
             yield
             # Only save for a db if that's the last stack frame for that db.
-            if not any(using in frame.db_versions for frame in _local.stack[:-1]):
+            if all(
+                using not in frame.db_versions for frame in _local.stack[:-1]
+            ):
                 current_frame = _current_frame()
                 _save_revision(
                     versions=current_frame.db_versions[using].values(),
@@ -331,9 +332,14 @@ def _post_save_receiver(sender, instance, using, **kwargs):
 
 
 def _m2m_changed_receiver(instance, using, action, model, reverse, **kwargs):
-    if action.startswith("post_") and not reverse:
-        if is_registered(instance) and is_active() and not is_manage_manually():
-            add_to_revision(instance, model_db=using)
+    if (
+        action.startswith("post_")
+        and not reverse
+        and is_registered(instance)
+        and is_active()
+        and not is_manage_manually()
+    ):
+        add_to_revision(instance, model_db=using)
 
 
 def _get_registration_key(model):
@@ -356,12 +362,11 @@ def _get_senders_and_signals(model):
     opts = model._meta.concrete_model._meta
     for field in opts.local_many_to_many:
         m2m_model = field.remote_field.through
-        if isinstance(m2m_model, str):
-            if "." not in m2m_model:
-                m2m_model = "{app_label}.{m2m_model}".format(
-                    app_label=opts.app_label,
-                    m2m_model=m2m_model
-                )
+        if isinstance(m2m_model, str) and "." not in m2m_model:
+            m2m_model = "{app_label}.{m2m_model}".format(
+                app_label=opts.app_label,
+                m2m_model=m2m_model
+            )
         yield m2m_model, m2m_changed, _m2m_changed_receiver
 
 
@@ -399,11 +404,9 @@ def register(model=None, fields=None, exclude=(), follow=(), format="json",
             signal.connect(signal_receiver, sender=sender)
         # All done!
         return model
+
     # Return a class decorator if model is not given
-    if model is None:
-        return register
-    # Register the model.
-    return register(model)
+    return register if model is None else register(model)
 
 
 def _assert_registered(model):

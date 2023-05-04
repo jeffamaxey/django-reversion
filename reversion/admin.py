@@ -53,9 +53,9 @@ class VersionAdmin(admin.ModelAdmin):
     def _reversion_get_template_list(self, template_name):
         opts = self.model._meta
         return (
-            "reversion/%s/%s/%s" % (opts.app_label, opts.object_name.lower(), template_name),
-            "reversion/%s/%s" % (opts.app_label, template_name),
-            "reversion/%s" % template_name,
+            f"reversion/{opts.app_label}/{opts.object_name.lower()}/{template_name}",
+            f"reversion/{opts.app_label}/{template_name}",
+            f"reversion/{template_name}",
         )
 
     def _reversion_order_version_queryset(self, queryset):
@@ -185,7 +185,9 @@ class VersionAdmin(admin.ModelAdmin):
         except (RevertError, models.ProtectedError) as ex:
             opts = self.model._meta
             messages.error(request, force_str(ex))
-            return redirect("{}:{}_{}_changelist".format(self.admin_site.name, opts.app_label, opts.model_name))
+            return redirect(
+                f"{self.admin_site.name}:{opts.app_label}_{opts.model_name}_changelist"
+            )
         except _RollBackRevisionView as ex:
             return ex.response
         return response
@@ -202,7 +204,7 @@ class VersionAdmin(admin.ModelAdmin):
             "title": _("Recover %(name)s") % {"name": version.object_repr},
             "recover": True,
         }
-        context.update(extra_context or {})
+        context |= (extra_context or {})
         return self._reversion_revisionform_view(
             request,
             version,
@@ -218,7 +220,7 @@ class VersionAdmin(admin.ModelAdmin):
             "title": _("Revert %(name)s") % {"name": version.object_repr},
             "revert": True,
         }
-        context.update(extra_context or {})
+        context |= (extra_context or {})
         return self._reversion_revisionform_view(
             request,
             version,
@@ -231,7 +233,7 @@ class VersionAdmin(admin.ModelAdmin):
             context = {
                 "has_change_permission": self.has_change_permission(request),
             }
-            context.update(extra_context or {})
+            context |= (extra_context or {})
             return super().changelist_view(request, context)
 
     def recoverlist_view(self, request, extra_context=None):
@@ -253,7 +255,7 @@ class VersionAdmin(admin.ModelAdmin):
             title=_("Recover deleted %(name)s") % {"name": force_str(opts.verbose_name_plural)},
             deleted=deleted,
         )
-        context.update(extra_context or {})
+        context |= (extra_context or {})
         return render(
             request,
             self.recover_list_template or self._reversion_get_template_list("recover_list.html"),
@@ -263,29 +265,32 @@ class VersionAdmin(admin.ModelAdmin):
     def history_view(self, request, object_id, extra_context=None):
         """Renders the history view."""
         # Check if user has view or change permissions for model
-        if hasattr(self, 'has_view_or_change_permission'):  # for Django >= 2.1
-            if not self.has_view_or_change_permission(request):
-                raise PermissionDenied
-        else:
-            if not self.has_change_permission(request):
-                raise PermissionDenied
-
+        if (
+            hasattr(self, 'has_view_or_change_permission')
+            and not self.has_view_or_change_permission(request)
+            or not hasattr(self, 'has_view_or_change_permission')
+            and not self.has_change_permission(request)
+        ):
+            raise PermissionDenied
         opts = self.model._meta
         action_list = [
             {
                 "revision": version.revision,
                 "url": reverse(
-                    "%s:%s_%s_revision" % (self.admin_site.name, opts.app_label, opts.model_name),
-                    args=(quote(version.object_id), version.id)
+                    f"{self.admin_site.name}:{opts.app_label}_{opts.model_name}_revision",
+                    args=(quote(version.object_id), version.id),
                 ),
             }
-            for version
-            in self._reversion_order_version_queryset(Version.objects.get_for_object_reference(
-                self.model,
-                unquote(object_id),  # Underscores in primary key get quoted to "_5F"
-            ).select_related("revision__user"))
+            for version in self._reversion_order_version_queryset(
+                Version.objects.get_for_object_reference(
+                    self.model,
+                    unquote(
+                        object_id
+                    ),  # Underscores in primary key get quoted to "_5F"
+                ).select_related("revision__user")
+            )
         ]
         # Compile the context.
         context = {"action_list": action_list}
-        context.update(extra_context or {})
+        context |= (extra_context or {})
         return super().history_view(request, object_id, context)

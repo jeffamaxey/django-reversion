@@ -356,35 +356,30 @@ def _safe_subquery(method, left_query, left_field_name, right_subquery, right_fi
     right_subquery = right_subquery.order_by().values_list(right_field_name, flat=True)
     left_field = left_query.model._meta.get_field(left_field_name)
     right_field = right_subquery.model._meta.get_field(right_field_name)
-    # If the databases don't match, we have to do it in-memory.
-    # If it's not a supported database, we also have to do it in-memory.
     if (
-        left_query.db != right_subquery.db or not
-        (
-            left_field.get_internal_type() != right_field.get_internal_type() and
-            connections[left_query.db].vendor in ("sqlite", "postgresql")
-        )
+        left_query.db != right_subquery.db
+        or left_field.get_internal_type() == right_field.get_internal_type()
+        or connections[left_query.db].vendor not in ("sqlite", "postgresql")
     ):
-        return getattr(left_query, method)(**{
-            "{}__in".format(left_field_name): list(right_subquery.iterator()),
-        })
-    else:
+        return getattr(left_query, method)(
+            **{f"{left_field_name}__in": list(right_subquery.iterator())}
+        )
         # If the left hand side is not a text field, we need to cast it.
-        if not isinstance(left_field, (models.CharField, models.TextField)):
-            left_field_name_str = "{}_str".format(left_field_name)
-            left_query = left_query.annotate(**{
-                left_field_name_str: _Str(left_field_name),
-            })
-            left_field_name = left_field_name_str
+    if not isinstance(left_field, (models.CharField, models.TextField)):
+        left_field_name_str = f"{left_field_name}_str"
+        left_query = left_query.annotate(**{
+            left_field_name_str: _Str(left_field_name),
+        })
+        left_field_name = left_field_name_str
         # If the right hand side is not a text field, we need to cast it.
-        if not isinstance(right_field, (models.CharField, models.TextField)):
-            right_field_name_str = "{}_str".format(right_field_name)
-            right_subquery = right_subquery.annotate(**{
-                right_field_name_str: _Str(right_field_name),
-            }).values_list(right_field_name_str, flat=True)
-            right_field_name = right_field_name_str
+    if not isinstance(right_field, (models.CharField, models.TextField)):
+        right_field_name_str = f"{right_field_name}_str"
+        right_subquery = right_subquery.annotate(**{
+            right_field_name_str: _Str(right_field_name),
+        }).values_list(right_field_name_str, flat=True)
+        right_field_name = right_field_name_str
         # Use Exists if running on the same DB, it is much much faster
-        exist_annotation_name = "{}_annotation_str".format(right_subquery.model._meta.db_table)
-        right_subquery = right_subquery.filter(**{right_field_name: models.OuterRef(left_field_name)})
-        left_query = left_query.annotate(**{exist_annotation_name: models.Exists(right_subquery)})
-        return getattr(left_query, method)(**{exist_annotation_name: True})
+    exist_annotation_name = f"{right_subquery.model._meta.db_table}_annotation_str"
+    right_subquery = right_subquery.filter(**{right_field_name: models.OuterRef(left_field_name)})
+    left_query = left_query.annotate(**{exist_annotation_name: models.Exists(right_subquery)})
+    return getattr(left_query, method)(**{exist_annotation_name: True})
